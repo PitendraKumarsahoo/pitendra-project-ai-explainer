@@ -79,10 +79,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "CodeXplain" },
-      { name: "description", content: "Analyze any codebase and explain it in plain language." },
+      { title: "CodeXplain — Understand and defend any codebase" },
+      { name: "description", content: "Upload a ZIP or paste a GitHub repo and get a plain-language breakdown: tech stack, folder tree, and AI file-by-file explanations." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { property: "og:title", content: "CodeXplain — Understand and defend any codebase" },
+      { name: "twitter:title", content: "CodeXplain — Understand and defend any codebase" },
+      { property: "og:description", content: "Upload a ZIP or paste a GitHub repo and get a plain-language breakdown: tech stack, folder tree, and AI file-by-file explanations." },
+      { name: "twitter:description", content: "Upload a ZIP or paste a GitHub repo and get a plain-language breakdown: tech stack, folder tree, and AI file-by-file explanations." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/36d695ac-7f07-4d74-9c9a-b1645b3a045f" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/36d695ac-7f07-4d74-9c9a-b1645b3a045f" },
     ],
     links: [
       {
@@ -95,7 +101,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap",
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
 

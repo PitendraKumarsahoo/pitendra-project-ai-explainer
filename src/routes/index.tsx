@@ -29,7 +29,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Turn any project into a human-readable report: detected stack, folder tree, and file-by-file AI explanations.",
+          "Upload a ZIP or paste a GitHub repo and get a plain-language breakdown: tech stack, folder tree, and AI file-by-file explanations.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
