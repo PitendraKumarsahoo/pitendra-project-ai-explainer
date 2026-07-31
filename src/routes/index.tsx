@@ -118,7 +118,14 @@ function Index() {
     }
   }
 
-  if (report) return <ReportView report={report} onReset={() => setReport(null)} />;
+  if (report)
+    return (
+      <ReportView
+        report={report}
+        onReset={() => setReport(null)}
+        onUpdate={(patch) => setReport((r) => (r ? { ...r, ...patch } : r))}
+      />
+    );
 
   return (
     <main className="relative min-h-screen overflow-hidden">
