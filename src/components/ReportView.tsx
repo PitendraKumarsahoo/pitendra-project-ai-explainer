@@ -1,14 +1,37 @@
 import { useMemo, useState } from "react";
+import { Download, FileText, Link2, Loader2 } from "lucide-react";
+import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
 import { FileTree } from "@/components/FileTree";
+import { InterviewPrepTab } from "@/components/InterviewPrepTab";
+import { ArchitectureTab } from "@/components/ArchitectureTab";
 import { formatBytes, type ProjectReport } from "@/lib/analysis";
+import { exportDocx, exportPdf } from "@/lib/export";
+import { generateDiagrams, generateInterviewPrep, shareReport } from "@/lib/codexplain.functions";
 import { cn } from "@/lib/utils";
 
-const TABS = ["Overview", "File Explorer"] as const;
+const TABS = ["Overview", "File Explorer", "Architecture", "Interview Prep"] as const;
 type Tab = (typeof TABS)[number];
 
-export function ReportView({ report, onReset }: { report: ProjectReport; onReset: () => void }) {
+export function ReportView({
+  report,
+  onReset,
+  onUpdate,
+  readOnly,
+}: {
+  report: ProjectReport;
+  onReset?: () => void;
+  onUpdate?: (patch: Partial<ProjectReport>) => void;
+  readOnly?: boolean;
+}) {
   const [tab, setTab] = useState<Tab>("Overview");
   const [selected, setSelected] = useState<string | null>(report.entryPoints[0] ?? null);
+  const [busy, setBusy] = useState<null | "prep" | "diagrams" | "pdf" | "docx" | "share">(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+
+  const runPrep = useServerFn(generateInterviewPrep);
+  const runDiagrams = useServerFn(generateDiagrams);
+  const runShare = useServerFn(shareReport);
 
   const summaryByPath = useMemo(
     () => new Map(report.summaries.map((s) => [s.path, s])),
@@ -18,20 +41,112 @@ export function ReportView({ report, onReset }: { report: ProjectReport; onReset
   const summary = selected ? summaryByPath.get(selected) : undefined;
   const totalBytes = report.files.reduce((a, f) => a + f.size, 0);
 
+  const context = () => ({
+    name: report.source,
+    stack: report.stack.map((s) => s.name),
+    overview: report.overview.slice(0, 8000),
+    paths: report.files.slice(0, 120).map((f) => f.path),
+    excerpts: report.files.slice(0, 16).map((f) => ({ path: f.path, content: f.content.slice(0, 4000) })),
+  });
+
+  async function withBusy(kind: NonNullable<typeof busy>, fn: () => Promise<void>) {
+    setBusy(kind);
+    try {
+      await fn();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const onPrep = () =>
+    withBusy("prep", async () => {
+      const prep = await runPrep({ data: context() });
+      onUpdate?.({ prep });
+    });
+
+  const onDiagrams = () =>
+    withBusy("diagrams", async () => {
+      const { diagrams } = await runDiagrams({ data: context() });
+      if (!diagrams.length) throw new Error("No diagrams could be generated.");
+      onUpdate?.({ diagrams });
+    });
+
+  const onShare = () =>
+    withBusy("share", async () => {
+      const payload = {
+        ...report,
+        files: report.files.map((f) => ({ ...f, content: f.content.slice(0, 8000) })),
+      };
+      const { id } = await runShare({ data: { source: report.source, payload: JSON.stringify(payload) } });
+      const url = `${window.location.origin}/r/${id}`;
+      setShareUrl(url);
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success("Read-only link copied to clipboard");
+      } catch {
+        toast.success("Read-only link created");
+      }
+    });
+
   return (
     <div className="mx-auto w-full max-w-6xl px-5 py-10">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-5">
         <div>
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary">report</p>
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary">
+            {readOnly ? "shared report" : "report"}
+          </p>
           <h1 className="mt-1 font-mono text-2xl text-foreground">{report.source}</h1>
         </div>
-        <button
-          onClick={onReset}
-          className="rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-        >
-          analyze another
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => withBusy("pdf", () => exportPdf(report))}
+            disabled={busy !== null}
+            className="flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-60"
+          >
+            {busy === "pdf" ? <Loader2 className="size-3 animate-spin" /> : <FileText className="size-3" />}
+            pdf
+          </button>
+          <button
+            onClick={() => withBusy("docx", () => exportDocx(report))}
+            disabled={busy !== null}
+            className="flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-60"
+          >
+            {busy === "docx" ? <Loader2 className="size-3 animate-spin" /> : <Download className="size-3" />}
+            docx
+          </button>
+          {!readOnly && (
+            <button
+              onClick={onShare}
+              disabled={busy !== null}
+              className="flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-60"
+            >
+              {busy === "share" ? <Loader2 className="size-3 animate-spin" /> : <Link2 className="size-3" />}
+              share link
+            </button>
+          )}
+          {!readOnly && onReset && (
+            <button
+              onClick={onReset}
+              className="rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+            >
+              analyze another
+            </button>
+          )}
+        </div>
       </div>
+
+      {shareUrl && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-sm border border-primary/40 bg-card px-4 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            read-only link
+          </span>
+          <a href={shareUrl} className="break-all font-mono text-xs text-primary underline-offset-4 hover:underline">
+            {shareUrl}
+          </a>
+        </div>
+      )}
 
       <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-sm border border-border bg-border sm:grid-cols-4">
         {[
@@ -49,7 +164,7 @@ export function ReportView({ report, onReset }: { report: ProjectReport; onReset
         ))}
       </div>
 
-      <div className="mt-8 flex gap-1 border-b border-border">
+      <div className="mt-8 flex flex-wrap gap-1 border-b border-border">
         {TABS.map((t) => (
           <button
             key={t}
@@ -66,7 +181,7 @@ export function ReportView({ report, onReset }: { report: ProjectReport; onReset
         ))}
       </div>
 
-      {tab === "Overview" ? (
+      {tab === "Overview" && (
         <div className="mt-8 grid gap-8 lg:grid-cols-[1.6fr_1fr]">
           <section>
             <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
@@ -130,7 +245,9 @@ export function ReportView({ report, onReset }: { report: ProjectReport; onReset
             </div>
           </aside>
         </div>
-      ) : (
+      )}
+
+      {tab === "File Explorer" && (
         <div className="mt-8 grid gap-6 lg:grid-cols-[320px_1fr]">
           <div className="max-h-[70vh] overflow-auto rounded-sm border border-border bg-card py-2">
             <FileTree node={report.tree} onSelect={setSelected} selected={selected} />
@@ -183,6 +300,24 @@ export function ReportView({ report, onReset }: { report: ProjectReport; onReset
             )}
           </div>
         </div>
+      )}
+
+      {tab === "Architecture" && (
+        <ArchitectureTab
+          diagrams={report.diagrams}
+          busy={busy === "diagrams"}
+          onGenerate={onDiagrams}
+          readOnly={readOnly}
+        />
+      )}
+
+      {tab === "Interview Prep" && (
+        <InterviewPrepTab
+          prep={report.prep}
+          busy={busy === "prep"}
+          onGenerate={onPrep}
+          readOnly={readOnly}
+        />
       )}
     </div>
   );

@@ -24,6 +24,24 @@ export type FileSummary = {
   symbols: string[];
 };
 
+export type InterviewQuestion = {
+  question: string;
+  answer: string;
+};
+
+export type InterviewPrep = {
+  basic: InterviewQuestion[];
+  intermediate: InterviewQuestion[];
+  grilling: InterviewQuestion[];
+};
+
+export type Diagram = {
+  title: string;
+  kind: "flowchart" | "er" | "component";
+  description: string;
+  mermaid: string;
+};
+
 export type ProjectReport = {
   source: string;
   files: SourceFile[];
@@ -33,6 +51,8 @@ export type ProjectReport = {
   entryPoints: string[];
   overview: string;
   summaries: FileSummary[];
+  prep?: InterviewPrep;
+  diagrams?: Diagram[];
 };
 
 const TEXT_EXT = new Set([
