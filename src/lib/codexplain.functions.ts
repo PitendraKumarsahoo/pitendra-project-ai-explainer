@@ -212,22 +212,95 @@ export const generateDiagrams = createServerFn({ method: "POST" })
     };
   });
 
+const ScoreInput = z.object({
+  name: z.string().max(200),
+  stack: z.array(z.string()).max(40),
+  overview: z.string().max(4000).optional(),
+  tier: z.enum(["basic", "intermediate", "grilling"]),
+  question: z.string().max(2000),
+  idealAnswer: z.string().max(4000),
+  draft: z.string().min(1).max(6000),
+});
+
+export const scoreAnswer = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => ScoreInput.parse(input))
+  .handler(async ({ data }) => {
+    const out = await callGateway([
+      {
+        role: "system",
+        content:
+          "You are a strict but fair viva examiner scoring a student's spoken-style draft answer about their own project. Score three dimensions 0-10: completeness (does it cover everything the question asks), correctness (is it technically accurate and consistent with the project), complexity (does it show depth — trade-offs, edge cases, real specifics rather than generic filler). Then give targeted, actionable improvements. Respond as JSON: {\"completeness\":number,\"correctness\":number,\"complexity\":number,\"verdict\":string,\"improvements\":[{\"label\":string,\"detail\":string}],\"missingPoints\":string[],\"strongerAnswer\":string}. verdict = one sentence. improvements = 2-4 items, label is 3-6 words, detail is 1-2 sentences saying exactly what to add or fix. missingPoints = short phrases the answer omitted. strongerAnswer = a tightened rewrite of the student's own answer, 3-5 sentences, first person, plain language, no markdown.",
+      },
+      {
+        role: "user",
+        content: `Project: ${data.name}\nStack: ${data.stack.join(", ")}\nOverview: ${
+          data.overview ?? "n/a"
+        }\nTier: ${data.tier}\nQuestion: ${data.question}\nReference ideal answer: ${
+          data.idealAnswer
+        }\n\nStudent's draft answer:\n${data.draft}`,
+      },
+    ]);
+    const clamp = (v: unknown) => Math.max(0, Math.min(10, Math.round(Number(v) || 0)));
+    const improvements = Array.isArray(out.improvements)
+      ? (out.improvements as Record<string, unknown>[])
+          .filter((i) => i && typeof i.label === "string")
+          .map((i) => ({ label: String(i.label), detail: String(i.detail ?? "") }))
+      : [];
+    return {
+      completeness: clamp(out.completeness),
+      correctness: clamp(out.correctness),
+      complexity: clamp(out.complexity),
+      verdict: String(out.verdict ?? ""),
+      improvements,
+      missingPoints: Array.isArray(out.missingPoints)
+        ? (out.missingPoints as unknown[]).map(String).slice(0, 8)
+        : [],
+      strongerAnswer: String(out.strongerAnswer ?? ""),
+    };
+  });
+
 const ShareInput = z.object({
   source: z.string().max(200),
   payload: z.string().max(4_000_000),
+  expiresInHours: z.number().int().min(1).max(8760).nullable().optional(),
 });
 
 export const shareReport = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => ShareInput.parse(input))
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const expiresAt =
+      data.expiresInHours == null
+        ? null
+        : new Date(Date.now() + data.expiresInHours * 3600_000).toISOString();
     const { data: row, error } = await supabaseAdmin
       .from("shared_reports")
-      .insert({ source: data.source, payload: JSON.parse(data.payload) })
-      .select("id")
+      .insert({ source: data.source, payload: JSON.parse(data.payload), expires_at: expiresAt })
+      .select("id, revoke_token, expires_at")
       .single();
     if (error) throw new Error(`Could not create share link: ${error.message}`);
-    return { id: row.id as string };
+    return {
+      id: row.id as string,
+      revokeToken: row.revoke_token as string,
+      expiresAt: row.expires_at as string | null,
+    };
+  });
+
+export const revokeReport = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) =>
+    z.object({ id: z.string().uuid(), revokeToken: z.string().min(8).max(200) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rows, error } = await supabaseAdmin
+      .from("shared_reports")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("id", data.id)
+      .eq("revoke_token", data.revokeToken)
+      .select("id");
+    if (error) throw new Error(error.message);
+    if (!rows?.length) throw new Error("That link could not be revoked (wrong or missing key).");
+    return { ok: true };
   });
 
 export const loadSharedReport = createServerFn({ method: "GET" })
@@ -236,10 +309,20 @@ export const loadSharedReport = createServerFn({ method: "GET" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: row, error } = await supabaseAdmin
       .from("shared_reports")
-      .select("source, payload, created_at")
+      .select("source, payload, created_at, expires_at, revoked_at")
       .eq("id", data.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    if (!row) return null;
-    return { source: row.source as string, payload: row.payload, createdAt: row.created_at };
+    if (!row) return { status: "missing" as const };
+    if (row.revoked_at) return { status: "revoked" as const };
+    if (row.expires_at && new Date(row.expires_at as string).getTime() < Date.now())
+      return { status: "expired" as const };
+    return {
+      status: "ok" as const,
+      source: row.source as string,
+      payload: row.payload,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at as string | null,
+    };
   });
+

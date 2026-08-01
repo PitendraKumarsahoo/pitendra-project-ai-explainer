@@ -17,20 +17,29 @@ export type Database = {
       shared_reports: {
         Row: {
           created_at: string
+          expires_at: string | null
           id: string
           payload: Json
+          revoke_token: string
+          revoked_at: string | null
           source: string
         }
         Insert: {
           created_at?: string
+          expires_at?: string | null
           id?: string
           payload: Json
+          revoke_token?: string
+          revoked_at?: string | null
           source: string
         }
         Update: {
           created_at?: string
+          expires_at?: string | null
           id?: string
           payload?: Json
+          revoke_token?: string
+          revoked_at?: string | null
           source?: string
         }
         Relationships: []

@@ -1,13 +1,19 @@
-import { useMemo, useState } from "react";
-import { Download, FileText, Link2, Loader2 } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Ban, Download, FileText, Link2, Loader2 } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { FileTree } from "@/components/FileTree";
 import { InterviewPrepTab } from "@/components/InterviewPrepTab";
 import { ArchitectureTab } from "@/components/ArchitectureTab";
 import { formatBytes, type ProjectReport } from "@/lib/analysis";
-import { exportDocx, exportPdf } from "@/lib/export";
-import { generateDiagrams, generateInterviewPrep, shareReport } from "@/lib/codexplain.functions";
+import { exportDocx, exportPdf, type DiagramImage } from "@/lib/export";
+import { svgToPngDataUrl } from "@/lib/diagram-image";
+import {
+  generateDiagrams,
+  generateInterviewPrep,
+  revokeReport,
+  shareReport,
+} from "@/lib/codexplain.functions";
 import { cn } from "@/lib/utils";
 
 const TABS = ["Overview", "File Explorer", "Architecture", "Interview Prep"] as const;
@@ -26,12 +32,26 @@ export function ReportView({
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
   const [selected, setSelected] = useState<string | null>(report.entryPoints[0] ?? null);
-  const [busy, setBusy] = useState<null | "prep" | "diagrams" | "pdf" | "docx" | "share">(null);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState<
+    null | "prep" | "diagrams" | "pdf" | "docx" | "share" | "revoke"
+  >(null);
+  const [share, setShare] = useState<
+    { url: string; id: string; revokeToken: string; expiresAt: string | null; revoked?: boolean } | null
+  >(null);
+  const [expiry, setExpiry] = useState<string>("168");
+  const svgs = useRef<Record<number, string>>({});
+  const [svgMap, setSvgMap] = useState<Record<number, string>>({});
 
   const runPrep = useServerFn(generateInterviewPrep);
   const runDiagrams = useServerFn(generateDiagrams);
   const runShare = useServerFn(shareReport);
+  const runRevoke = useServerFn(revokeReport);
+
+  const onSvg = useCallback((index: number, svg: string | null) => {
+    if (svg) svgs.current[index] = svg;
+    else delete svgs.current[index];
+    setSvgMap({ ...svgs.current });
+  }, []);
 
   const summaryByPath = useMemo(
     () => new Map(report.summaries.map((s) => [s.path, s])),
@@ -73,15 +93,42 @@ export function ReportView({
       onUpdate?.({ diagrams });
     });
 
+  const onPdf = () =>
+    withBusy("pdf", async () => {
+      const images: DiagramImage[] = [];
+      for (const [i, d] of (report.diagrams ?? []).entries()) {
+        const svg = svgs.current[i];
+        if (!svg) continue;
+        try {
+          const { dataUrl, width, height } = await svgToPngDataUrl(svg, 2);
+          images[i] = { title: d.title, dataUrl, width, height };
+        } catch {
+          /* fall back to mermaid source in the PDF */
+        }
+      }
+      await exportPdf(report, images);
+    });
+
+  const onRevoke = () =>
+    withBusy("revoke", async () => {
+      if (!share) return;
+      await runRevoke({ data: { id: share.id, revokeToken: share.revokeToken } });
+      setShare({ ...share, revoked: true });
+      toast.success("Share link revoked — it can no longer be viewed.");
+    });
+
   const onShare = () =>
     withBusy("share", async () => {
       const payload = {
         ...report,
         files: report.files.map((f) => ({ ...f, content: f.content.slice(0, 8000) })),
       };
-      const { id } = await runShare({ data: { source: report.source, payload: JSON.stringify(payload) } });
+      const hours = expiry === "never" ? null : Number(expiry);
+      const { id, revokeToken, expiresAt } = await runShare({
+        data: { source: report.source, payload: JSON.stringify(payload), expiresInHours: hours },
+      });
       const url = `${window.location.origin}/r/${id}`;
-      setShareUrl(url);
+      setShare({ url, id, revokeToken, expiresAt });
       try {
         await navigator.clipboard.writeText(url);
         toast.success("Read-only link copied to clipboard");
@@ -101,7 +148,7 @@ export function ReportView({
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => withBusy("pdf", () => exportPdf(report))}
+            onClick={onPdf}
             disabled={busy !== null}
             className="flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-60"
           >
@@ -116,6 +163,20 @@ export function ReportView({
             {busy === "docx" ? <Loader2 className="size-3 animate-spin" /> : <Download className="size-3" />}
             docx
           </button>
+          {!readOnly && (
+            <select
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              aria-label="Share link expiry"
+              className="rounded-sm border border-border bg-card px-2 py-1.5 font-mono text-xs text-muted-foreground outline-none focus:border-primary"
+            >
+              <option value="1">expires in 1 hour</option>
+              <option value="24">expires in 24 hours</option>
+              <option value="168">expires in 7 days</option>
+              <option value="720">expires in 30 days</option>
+              <option value="never">never expires</option>
+            </select>
+          )}
           {!readOnly && (
             <button
               onClick={onShare}
@@ -137,14 +198,35 @@ export function ReportView({
         </div>
       </div>
 
-      {shareUrl && (
+      {share && (
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-sm border border-primary/40 bg-card px-4 py-3">
           <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
             read-only link
           </span>
-          <a href={shareUrl} className="break-all font-mono text-xs text-primary underline-offset-4 hover:underline">
-            {shareUrl}
-          </a>
+          {share.revoked ? (
+            <span className="break-all font-mono text-xs text-destructive line-through">{share.url}</span>
+          ) : (
+            <a href={share.url} className="break-all font-mono text-xs text-primary underline-offset-4 hover:underline">
+              {share.url}
+            </a>
+          )}
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {share.revoked
+              ? "revoked"
+              : share.expiresAt
+                ? `expires ${new Date(share.expiresAt).toLocaleString()}`
+                : "no expiry"}
+          </span>
+          {!share.revoked && (
+            <button
+              onClick={onRevoke}
+              disabled={busy !== null}
+              className="ml-auto flex items-center gap-1.5 rounded-sm border border-border px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive disabled:opacity-60"
+            >
+              {busy === "revoke" ? <Loader2 className="size-3 animate-spin" /> : <Ban className="size-3" />}
+              revoke access
+            </button>
+          )}
         </div>
       )}
 
@@ -308,6 +390,8 @@ export function ReportView({
           busy={busy === "diagrams"}
           onGenerate={onDiagrams}
           readOnly={readOnly}
+          onSvg={onSvg}
+          svgs={svgMap}
         />
       )}
 
@@ -317,6 +401,11 @@ export function ReportView({
           busy={busy === "prep"}
           onGenerate={onPrep}
           readOnly={readOnly}
+          context={{
+            name: report.source,
+            stack: report.stack.map((s) => s.name),
+            overview: report.overview,
+          }}
         />
       )}
     </div>
