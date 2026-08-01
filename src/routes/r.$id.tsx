@@ -42,16 +42,38 @@ function SharedReport() {
       </div>
     );
 
-  if (error || !data)
+  if (error || !data || data.status !== "ok") {
+    const state = data?.status ?? "missing";
+    const copy = {
+      revoked: {
+        code: "410",
+        title: "This shared report has been revoked",
+        blurb: "The author turned off access to this link.",
+      },
+      expired: {
+        code: "410",
+        title: "This share link has expired",
+        blurb: "Ask the author for a fresh link.",
+      },
+      missing: {
+        code: "404",
+        title: "This shared report doesn't exist",
+        blurb: "The link may be mistyped.",
+      },
+    }[state === "revoked" || state === "expired" ? state : "missing"];
+
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-5 text-center">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary">404</p>
-        <h1 className="font-mono text-xl text-foreground">This shared report doesn&apos;t exist</h1>
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary">{copy.code}</p>
+        <h1 className="font-mono text-xl text-foreground">{copy.title}</h1>
+        <p className="font-mono text-xs text-muted-foreground">{copy.blurb}</p>
         <a href="/" className="font-mono text-xs text-muted-foreground underline-offset-4 hover:text-primary hover:underline">
           analyze your own project
         </a>
       </div>
     );
+  }
 
   return <ReportView report={data.payload as unknown as ProjectReport} readOnly />;
 }
+
