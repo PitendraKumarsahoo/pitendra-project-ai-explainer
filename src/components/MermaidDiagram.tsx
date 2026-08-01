@@ -2,9 +2,17 @@ import { useEffect, useRef, useState } from "react";
 
 let idCounter = 0;
 
-export function MermaidDiagram({ code }: { code: string }) {
+export function MermaidDiagram({
+  code,
+  onRendered,
+}: {
+  code: string;
+  onRendered?: (svg: string | null) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const rendered = useRef(onRendered);
+  rendered.current = onRendered;
 
   useEffect(() => {
     let cancelled = false;
@@ -31,9 +39,13 @@ export function MermaidDiagram({ code }: { code: string }) {
         if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;
           setError(null);
+          rendered.current?.(ref.current.querySelector("svg")?.outerHTML ?? svg);
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Could not render diagram.");
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Could not render diagram.");
+          rendered.current?.(null);
+        }
       }
     })();
     return () => {
