@@ -1,5 +1,7 @@
 import type { ProjectReport } from "./analysis";
 
+export type DiagramImage = { title: string; dataUrl: string; width: number; height: number };
+
 function reportSections(report: ProjectReport) {
   const stack = report.stack.map((s) => `${s.name}${s.version ? ` ${s.version}` : ""}`).join(", ");
   const languages = report.languages
@@ -13,7 +15,37 @@ function treeLines(report: ProjectReport) {
   return report.files.map((f) => f.path);
 }
 
-export async function exportPdf(report: ProjectReport) {
+const SNIPPET_LINES = 24;
+const SNIPPET_CHARS = 1600;
+
+/** First lines of a file, numbered, for use as an inline citation snippet. */
+export function snippetFor(report: ProjectReport, path: string) {
+  const file = report.files.find((f) => f.path === path);
+  if (!file || !file.content.trim()) return null;
+  const all = file.content.replace(/\t/g, "  ").split("\n");
+  const lines = all.slice(0, SNIPPET_LINES);
+  const text = lines
+    .map((l, i) => `${String(i + 1).padStart(3, " ")} | ${l.slice(0, 120)}`)
+    .join("\n")
+    .slice(0, SNIPPET_CHARS);
+  return {
+    citation: `${path}:1-${lines.length}${all.length > lines.length ? ` of ${all.length} lines` : ""}`,
+    text,
+  };
+}
+
+/** Paths from the codebase that a piece of generated text explicitly references. */
+export function citationsIn(report: ProjectReport, text: string) {
+  const hits: string[] = [];
+  for (const f of report.files) {
+    const base = f.path.split("/").pop()!;
+    if (text.includes(f.path) || (base.length > 4 && text.includes(base))) hits.push(f.path);
+    if (hits.length >= 5) break;
+  }
+  return hits;
+}
+
+export async function exportPdf(report: ProjectReport, diagramImages: DiagramImage[] = []) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "letter" });
   const margin = 56;
@@ -41,6 +73,15 @@ export async function exportPdf(report: ProjectReport) {
       doc.text(line, margin, y);
       y += size + 4;
     }
+  };
+  const citation = (text: string) => {
+    doc.setFont("courier", "normal").setFontSize(8).setTextColor(110);
+    for (const line of doc.splitTextToSize(`source: ${text}`, width) as string[]) {
+      nl(12);
+      doc.text(line, margin, y);
+      y += 11;
+    }
+    doc.setTextColor(0);
   };
 
   doc.setFont("helvetica", "bold").setFontSize(22);
@@ -75,20 +116,41 @@ export async function exportPdf(report: ProjectReport) {
     y += 14;
     body(s.summary);
     if (s.symbols?.length) body(s.symbols.map((x) => `• ${x}`).join("\n"), 9);
+    const snip = snippetFor(report, s.path);
+    if (snip) {
+      citation(snip.citation);
+      body(snip.text, 8, true);
+    }
     y += 6;
   }
 
   if (report.diagrams?.length) {
-    heading("Architecture diagrams (Mermaid source)");
-    for (const d of report.diagrams) {
+    heading("Architecture diagrams");
+    report.diagrams.forEach((d, i) => {
       nl(30);
       doc.setFont("helvetica", "bold").setFontSize(11);
       doc.text(d.title, margin, y);
       y += 14;
       body(d.description);
-      body(d.mermaid, 8, true);
+      const img = diagramImages[i];
+      if (img) {
+        const drawW = width;
+        const drawH = Math.min(
+          bottom - margin,
+          (img.height / Math.max(1, img.width)) * drawW,
+        );
+        nl(drawH + 10);
+        try {
+          doc.addImage(img.dataUrl, "PNG", margin, y, drawW, drawH);
+          y += drawH + 10;
+        } catch {
+          body(d.mermaid, 8, true);
+        }
+      } else {
+        body(d.mermaid, 8, true);
+      }
       y += 6;
-    }
+    });
   }
 
   if (report.prep) {
@@ -104,6 +166,8 @@ export async function exportPdf(report: ProjectReport) {
           y += 14;
         }
         body(q.answer);
+        const cites = citationsIn(report, `${q.question} ${q.answer}`);
+        if (cites.length) citation(cites.join(", "));
         y += 4;
       });
     }
@@ -117,13 +181,14 @@ export async function exportDocx(report: ProjectReport) {
   const { saveAs } = await import("file-saver");
   const { stack, languages } = reportSections(report);
 
-  const p = (text: string, opts: { bold?: boolean; mono?: boolean; size?: number } = {}) =>
+  const p = (text: string, opts: { bold?: boolean; mono?: boolean; size?: number; italics?: boolean } = {}) =>
     new Paragraph({
       spacing: { after: 120 },
       children: [
         new TextRun({
           text,
           bold: opts.bold,
+          italics: opts.italics,
           font: opts.mono ? "Courier New" : "Arial",
           size: opts.size ?? 22,
         }),
@@ -155,6 +220,11 @@ export async function exportDocx(report: ProjectReport) {
   for (const s of report.summaries) {
     children.push(h(s.path, HeadingLevel.HEADING_2), p(s.summary));
     for (const sym of s.symbols ?? []) children.push(p(`• ${sym}`, { mono: true, size: 18 }));
+    const snip = snippetFor(report, s.path);
+    if (snip) {
+      children.push(p(`source: ${snip.citation}`, { italics: true, size: 16 }));
+      for (const line of snip.text.split("\n")) children.push(p(line, { mono: true, size: 16 }));
+    }
   }
 
   if (report.diagrams?.length) {
@@ -171,6 +241,8 @@ export async function exportDocx(report: ProjectReport) {
       children.push(h(tier.charAt(0).toUpperCase() + tier.slice(1), HeadingLevel.HEADING_2));
       list.forEach((q, i) => {
         children.push(p(`${i + 1}. ${q.question}`, { bold: true }), p(q.answer));
+        const cites = citationsIn(report, `${q.question} ${q.answer}`);
+        if (cites.length) children.push(p(`source: ${cites.join(", ")}`, { italics: true, size: 16 }));
       });
     }
   }

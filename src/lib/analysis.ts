@@ -29,11 +29,22 @@ export type InterviewQuestion = {
   answer: string;
 };
 
+export type AnswerScore = {
+  completeness: number;
+  correctness: number;
+  complexity: number;
+  verdict: string;
+  improvements: { label: string; detail: string }[];
+  missingPoints: string[];
+  strongerAnswer: string;
+};
+
 export type InterviewPrep = {
   basic: InterviewQuestion[];
   intermediate: InterviewQuestion[];
   grilling: InterviewQuestion[];
 };
+
 
 export type Diagram = {
   title: string;
