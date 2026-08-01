@@ -40,7 +40,7 @@ export function ReportView({
   >(null);
   const [expiry, setExpiry] = useState<string>("168");
   const svgs = useRef<Record<number, string>>({});
-  const [svgVersion, setSvgVersion] = useState(0);
+  const [svgMap, setSvgMap] = useState<Record<number, string>>({});
 
   const runPrep = useServerFn(generateInterviewPrep);
   const runDiagrams = useServerFn(generateDiagrams);
@@ -50,7 +50,7 @@ export function ReportView({
   const onSvg = useCallback((index: number, svg: string | null) => {
     if (svg) svgs.current[index] = svg;
     else delete svgs.current[index];
-    setSvgVersion((v) => v + 1);
+    setSvgMap({ ...svgs.current });
   }, []);
 
   const summaryByPath = useMemo(
@@ -391,7 +391,7 @@ export function ReportView({
           onGenerate={onDiagrams}
           readOnly={readOnly}
           onSvg={onSvg}
-          svgs={{ ...svgs.current, __v: svgVersion } as unknown as Record<number, string>}
+          svgs={svgMap}
         />
       )}
 
